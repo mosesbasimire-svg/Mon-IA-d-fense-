@@ -1,20 +1,22 @@
-const SUPABASE_URL = "https://qhlrbzqlivkaiydfkkqg.supabase.co";
-const SUPABASE_KEY = "sb_publishable_k-TqofekxbnTFFmajug_lQ_bitz7C_9";
-
 const $ = id => document.getElementById(id);
 
 let rec = null;
 let listening = false;
 let finalText = "";
-let audioContext = null;
-let analyser = null;
-let source = null;
-let stream = null;
+let ctx = null;
+let an = null;
+let src = null;
 let raf = null;
 
+const FUNCTION_URL =
+  "https://qhlrbzqlivkaiydfkkqg.supabase.co/functions/v1/clever-function";
+
+/* =========================
+   RECONNAISSANCE VOCALE
+========================= */
+
 const Speech =
-  window.SpeechRecognition ||
-  window.webkitSpeechRecognition;
+  window.SpeechRecognition || window.webkitSpeechRecognition;
 
 if (Speech) {
   rec = new Speech();
@@ -30,29 +32,23 @@ if (Speech) {
     $("stop").disabled = false;
   };
 
-  rec.onresult = event => {
+  rec.onresult = e => {
     let interim = "";
 
-    for (
-      let i = event.resultIndex;
-      i < event.results.length;
-      i++
-    ) {
-      const text = event.results[i][0].transcript;
-
-      if (event.results[i].isFinal) {
-        finalText += text + " ";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        finalText += e.results[i][0].transcript + " ";
       } else {
-        interim += text;
+        interim += e.results[i][0].transcript;
       }
     }
 
     $("q").value = (finalText + interim).trim();
   };
 
-  rec.onerror = event => {
-    $("state").textContent =
-      "Erreur microphone : " + event.error;
+  rec.onerror = e => {
+    stop();
+    $("state").textContent = "Erreur : " + e.error;
   };
 
   rec.onend = () => {
@@ -63,129 +59,57 @@ if (Speech) {
     }
   };
 } else {
-  $("state").textContent =
-    "❌ Reconnaissance vocale non compatible";
+  $("state").textContent = "Voix non compatible avec ce navigateur.";
 }
 
+/* =========================
+   NIVEAU DU MICRO
+========================= */
 
-// 🎙️ Activation du microphone
-async function startMicrophone() {
+async function meter() {
+  if (!navigator.mediaDevices?.getUserMedia) return;
+
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: true
-    });
+    const stream =
+      await navigator.mediaDevices.getUserMedia({ audio: true });
 
-    audioContext =
-      new (window.AudioContext ||
-        window.webkitAudioContext)();
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
 
-    analyser = audioContext.createAnalyser();
+    an = ctx.createAnalyser();
+    src = ctx.createMediaStreamSource(stream);
 
-    source =
-      audioContext.createMediaStreamSource(stream);
+    src.connect(an);
 
-    source.connect(analyser);
+    const data = new Uint8Array(an.frequencyBinCount);
 
-    const data =
-      new Uint8Array(analyser.frequencyBinCount);
+    function loop() {
+      if (!an) return;
 
-    function updateLevel() {
-      if (!analyser) return;
-
-      analyser.getByteTimeDomainData(data);
+      an.getByteTimeDomainData(data);
 
       let sum = 0;
 
-      for (const value of data) {
-        const v = (value - 128) / 128;
+      for (const x of data) {
+        const v = (x - 128) / 128;
         sum += v * v;
       }
 
-      const level =
-        Math.min(
-          100,
-          Math.sqrt(sum / data.length) * 300
-        );
+      $("level").style.width =
+        Math.min(100, Math.sqrt(sum / data.length) * 300) + "%";
 
-      $("level").style.width = level + "%";
-
-      raf = requestAnimationFrame(updateLevel);
+      raf = requestAnimationFrame(loop);
     }
 
-    updateLevel();
+    loop();
 
-  } catch (error) {
-    $("state").textContent =
-      "❌ Microphone refusé ou indisponible";
-
-    console.error(error);
-  }
+  } catch (e) {}
 }
 
+/* =========================
+   ARRÊTER LE MICRO
+========================= */
 
-// ☁️ Enregistrer la question dans Supabase
-async function saveQuestion(question) {
-
-  try {
-
-    const response = await fetch(
-      SUPABASE_URL + "/rest/v1/defense_questions",
-      {
-        method: "POST",
-
-        headers: {
-          "apikey": SUPABASE_KEY,
-          "Authorization": "Bearer " + SUPABASE_KEY,
-          "Content-Type": "application/json",
-          "Prefer": "return=minimal"
-        },
-
-        body: JSON.stringify({
-          question: question
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(errorText);
-    }
-
-    return true;
-
-  } catch (error) {
-
-    console.error(
-      "Erreur Supabase :",
-      error
-    );
-
-    return false;
-  }
-}
-
-
-// ▶️ Démarrer
-$("start").onclick = async () => {
-
-  finalText = "";
-  $("q").value = "";
-
-  await startMicrophone();
-
-  if (rec) {
-    try {
-      rec.start();
-    } catch (error) {
-      console.error(error);
-    }
-  }
-};
-
-
-// ⏹️ Arrêter
-$("stop").onclick = async () => {
-
+function stop() {
   listening = false;
 
   if (rec) {
@@ -194,70 +118,69 @@ $("stop").onclick = async () => {
     } catch (e) {}
   }
 
-  const question = $("q").value.trim();
-
-  if (question) {
-
-    $("state").textContent =
-      "☁️ Enregistrement de la question...";
-
-    const saved = await saveQuestion(question);
-
-    if (saved) {
-      $("state").textContent =
-        "✅ Question enregistrée dans Supabase";
-    } else {
-      $("state").textContent =
-        "⚠️ Question reconnue mais non enregistrée";
-    }
-  } else {
-    $("state").textContent = "Prêt";
-  }
+  $("start").disabled = false;
+  $("stop").disabled = true;
+  $("state").textContent = "Prêt";
 
   if (raf) {
     cancelAnimationFrame(raf);
     raf = null;
   }
 
-  if (stream) {
-    stream.getTracks().forEach(track => track.stop());
-    stream = null;
+  if (src?.mediaStream) {
+    src.mediaStream.getTracks().forEach(track => track.stop());
   }
 
-  if (audioContext) {
-    audioContext.close();
-    audioContext = null;
+  if (ctx) {
+    ctx.close().catch(() => {});
   }
 
-  analyser = null;
-  source = null;
+  ctx = null;
+  an = null;
 
   $("level").style.width = "0%";
-  $("start").disabled = false;
-  $("stop").disabled = true;
+}
+
+/* =========================
+   BOUTON DÉMARRER
+========================= */
+
+$("start").onclick = () => {
+  finalText = "";
+  $("q").value = "";
+
+  try {
+    rec?.start();
+    meter();
+  } catch (e) {}
 };
 
+/* =========================
+   BOUTON ARRÊTER
+========================= */
 
-// 🧹 Effacer
+$("stop").onclick = stop;
+
+/* =========================
+   BOUTON EFFACER
+========================= */
+
 $("clear").onclick = () => {
-
   $("q").value = "";
   $("answer").textContent =
     "La réponse apparaîtra ici.";
-
   $("sources").textContent =
     "Aucune recherche effectuée.";
-
-  $("state").textContent = "Prêt";
 };
 
+/* =========================
+   ANALYSER AVEC SUPABASE
+========================= */
 
-// 🤖 Analyse
 $("ask").onclick = async () => {
 
   const question = $("q").value.trim();
   const memo = $("memo").value.trim();
-  const web = $("web").checked;
 
   if (!question) {
     $("answer").textContent =
@@ -265,20 +188,46 @@ $("ask").onclick = async () => {
     return;
   }
 
-  $("state").textContent =
-    "🔎 Question enregistrée. Analyse prête.";
-
-  $("sources").innerHTML =
-    web
-      ? "🌐 Recherche Web activée — connexion IA à ajouter."
-      : "🌐 Recherche Web désactivée.";
-
   $("answer").textContent =
-    "Question : " +
-    question +
-    "\n\n" +
-    "Prototype connecté à Supabase.\n\n" +
-    (memo
-      ? "Le mémoire fourni sera utilisé pour la prochaine étape."
-      : "Ajoute ton mémoire pour préparer l'analyse.");
-};
+    "⏳ Analyse en cours...";
+
+  $("sources").textContent =
+    "🔄 Connexion au moteur d'analyse...";
+
+  try {
+
+    const response = await fetch(FUNCTION_URL, {
+      method: "POST",
+
+      headers: {
+        "Content-Type": "application/json"
+      },
+
+      body: JSON.stringify({
+        question: question,
+        memo: memo
+      })
+    });
+
+    const data = await response.json();
+
+    if (!response.ok) {
+      throw new Error(
+        data.error || "Erreur du serveur."
+      );
+    }
+
+    $("answer").textContent =
+      data.answer || "Aucune réponse reçue.";
+
+    $("sources").textContent =
+      "✅ Réponse reçue depuis Supabase.";
+
+  } catch (error) {
+
+    $("answer").textContent =
+      "❌ Erreur : " + error.message;
+
+    $("sources").textContent =
+      "Impossible de contacter le moteur d'analyse.";
+  }
