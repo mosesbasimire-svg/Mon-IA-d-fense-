@@ -1,25 +1,7 @@
-# Defense AI V2 — version améliorée
+# Defense AI V2 — voix Android renforcée
 
-Cette version ajoute :
+Cette version demande explicitement l'accès au microphone avant de lancer SpeechRecognition, affiche les erreurs (micro refusé, aucune parole, réseau, etc.), et indique quand la reconnaissance est terminée.
 
-- 🎙️ une reconnaissance vocale améliorée avec messages d'erreur clairs ;
-- 📄 import direct de fichiers PDF ;
-- 📝 import direct de fichiers DOCX ;
-- 📚 extraction du texte du document vers « Ton mémoire » ;
-- 🗑️ bouton pour vider le mémoire ;
-- compatibilité mobile avec une interface adaptée.
+IMPORTANT : la reconnaissance vocale du navigateur fonctionne surtout dans Chrome Android avec une page HTTPS. Si l'application est ouverte sous `content://` ou comme simple fichier local, Android peut bloquer SpeechRecognition. Dans ce cas, publiez la page sur GitHub Pages/HTTPS ou utilisez une vraie application Android native.
 
-## Important pour les PDF
-
-Les PDF contenant du vrai texte sont importés directement.
-Un PDF qui est uniquement constitué de photos/scans nécessitera ensuite un module OCR pour reconnaître le texte.
-
-## Important pour la voix
-
-Sur Android, utilisez de préférence Google Chrome et autorisez le microphone.
-La reconnaissance vocale du navigateur peut nécessiter Internet.
-
-## IA et recherche Web
-
-Comme dans la V2 originale, aucune clé API secrète n'est placée dans le navigateur.
-La prochaine étape peut connecter un backend sécurisé (par exemple Supabase Edge Functions) à une API IA et à une recherche Web.
+Elle conserve aussi l'import PDF/DOCX dans « Ton mémoire ».

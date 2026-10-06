@@ -1,190 +1,129 @@
 const $=id=>document.getElementById(id);
+let recognition=null, listening=false, finalText='', stream=null, audioCtx=null, analyser=null, raf=null;
+const SpeechRecognition=window.SpeechRecognition||window.webkitSpeechRecognition;
 
-let rec=null, listening=false, finalText='', ctx=null, an=null, src=null, raf=null;
-const Speech=window.SpeechRecognition||window.webkitSpeechRecognition;
-
-function setState(t){ $('state').textContent=t; }
-
-if(Speech){
-  rec=new Speech();
-  rec.lang='fr-FR';
-  rec.continuous=false;
-  rec.interimResults=true;
-  rec.maxAlternatives=1;
-
-  rec.onstart=()=>{
-    listening=true;
-    setState('🎙️ Écoute...');
-    $('start').disabled=true;
-    $('stop').disabled=false;
-    $('voiceHelp').textContent='Parlez clairement. Le texte apparaîtra ici dès que le téléphone reconnaît votre voix.';
-  };
-
-  rec.onresult=e=>{
-    let inter='';
-    for(let i=e.resultIndex;i<e.results.length;i++){
-      const text=e.results[i][0].transcript;
-      if(e.results[i].isFinal) finalText += text+' ';
-      else inter += text;
-    }
-    $('q').value=(finalText+inter).trim();
-  };
-
-  rec.onerror=e=>{
-    listening=false;
-    $('start').disabled=false;
-    $('stop').disabled=true;
-    setState('⚠️ Problème vocal');
-    const messages={
-      'not-allowed':'Microphone refusé. Autorisez le microphone pour cette page.',
-      'service-not-allowed':'Le service de reconnaissance vocale est bloqué.',
-      'no-speech':'Aucune parole détectée. Appuyez de nouveau sur Écouter et parlez.',
-      'audio-capture':'Le microphone n’est pas disponible.',
-      'network':'La reconnaissance vocale nécessite une connexion Internet.'
-    };
-    $('voiceHelp').textContent=messages[e.error]||('Erreur de reconnaissance : '+e.error);
-    stopMeter();
-  };
-
-  rec.onend=()=>{
-    listening=false;
-    $('start').disabled=false;
-    $('stop').disabled=true;
-    setState('Prêt');
-    stopMeter();
-  };
-}else{
-  setState('⚠️ Voix non compatible');
-  $('voiceHelp').textContent='La reconnaissance vocale n’est pas disponible dans ce navigateur. Ouvrez l’application dans Google Chrome et autorisez le microphone.';
-}
-
-async function meter(){
-  if(!navigator.mediaDevices?.getUserMedia)return;
-  try{
-    const st=await navigator.mediaDevices.getUserMedia({audio:true});
-    ctx=new(window.AudioContext||window.webkitAudioContext)();
-    an=ctx.createAnalyser();
-    src=ctx.createMediaStreamSource(st);
-    an.fftSize=256;
-    src.connect(an);
-    const d=new Uint8Array(an.frequencyBinCount);
-    function loop(){
-      if(!an)return;
-      an.getByteTimeDomainData(d);
-      let s=0;
-      for(const x of d){const v=(x-128)/128;s+=v*v}
-      $('level').style.width=Math.min(100,Math.sqrt(s/d.length)*300)+'%';
-      raf=requestAnimationFrame(loop);
-    }
-    loop();
-  }catch(e){}
-}
+function state(t){$('state').textContent=t;}
+function help(t){$('voiceHelp').textContent=t;}
 
 function stopMeter(){
-  if(raf)cancelAnimationFrame(raf);
-  raf=null;
-  if(src?.mediaStream)src.mediaStream.getTracks().forEach(t=>t.stop());
-  if(ctx)ctx.close().catch(()=>{});
-  ctx=null;an=null;src=null;
-  $('level').style.width='0%';
+  if(raf) cancelAnimationFrame(raf); raf=null;
+  if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;}
+  if(audioCtx){audioCtx.close().catch(()=>{});audioCtx=null;}
+  analyser=null; $('level').style.width='0%';
+}
+function meter(){
+  if(!stream || !audioCtx)return;
+  analyser=audioCtx.createAnalyser(); analyser.fftSize=256;
+  const src=audioCtx.createMediaStreamSource(stream); src.connect(analyser);
+  const data=new Uint8Array(analyser.frequencyBinCount);
+  const loop=()=>{
+    if(!analyser)return;
+    analyser.getByteTimeDomainData(data); let s=0;
+    for(const x of data){const v=(x-128)/128;s+=v*v;}
+    $('level').style.width=Math.min(100,Math.sqrt(s/data.length)*350)+'%';
+    raf=requestAnimationFrame(loop);
+  }; loop();
 }
 
-function stop(){
-  listening=false;
-  if(rec)try{rec.stop()}catch(e){}
-  $('start').disabled=false;
-  $('stop').disabled=true;
-  setState('Prêt');
-  stopMeter();
+async function microphonePermission(){
+  if(!navigator.mediaDevices?.getUserMedia) return true;
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:true});
+    audioCtx=new (window.AudioContext||window.webkitAudioContext)();
+    if(audioCtx.state==='suspended') await audioCtx.resume();
+    meter();
+    return true;
+  }catch(e){
+    state('⚠️ Microphone refusé');
+    help('Autorisez le microphone dans Chrome : Paramètres du site → Microphone → Autoriser, puis rechargez la page.');
+    return false;
+  }
+}
+
+if(SpeechRecognition){
+  recognition=new SpeechRecognition();
+  recognition.lang='fr-FR';
+  recognition.continuous=false;
+  recognition.interimResults=true;
+  recognition.maxAlternatives=3;
+
+  recognition.onstart=()=>{
+    listening=true; state('🎙️ Écoute...');
+    $('start').disabled=true; $('stop').disabled=false;
+    help('Parlez maintenant. Votre voix sera transformée en texte.');
+  };
+  recognition.onresult=e=>{
+    let interim='';
+    for(let i=e.resultIndex;i<e.results.length;i++){
+      const t=e.results[i][0].transcript;
+      if(e.results[i].isFinal) finalText += t+' '; else interim += t;
+    }
+    $('q').value=(finalText+interim).trim();
+  };
+  recognition.onerror=e=>{
+    listening=false; $('start').disabled=false; $('stop').disabled=true; stopMeter();
+    const m={
+      'not-allowed':'Microphone non autorisé. Autorisez le microphone puis réessayez.',
+      'service-not-allowed':'La reconnaissance vocale est bloquée par le navigateur.',
+      'no-speech':'Aucune parole détectée. Appuyez sur Écouter et parlez immédiatement.',
+      'audio-capture':'Aucun microphone disponible.',
+      'network':'Le service vocal a besoin d’Internet.'
+    };
+    state('⚠️ '+e.error); help(m[e.error]||('Erreur vocale : '+e.error));
+  };
+  recognition.onend=()=>{
+    listening=false; $('start').disabled=false; $('stop').disabled=true; stopMeter();
+    if($('q').value.trim()){state('✅ Texte détecté');help('Transcription terminée. Vous pouvez modifier la question ou appuyer sur Analyser avec IA.');}
+    else state('Prêt');
+  };
+}else{
+  state('⚠️ Voix indisponible');
+  help('Ce navigateur ne fournit pas SpeechRecognition. Utilisez Google Chrome sur Android et ouvrez cette application depuis une adresse HTTPS (GitHub Pages), pas depuis content:// ou un fichier local.');
 }
 
 $('start').onclick=async()=>{
-  finalText='';
-  $('q').value='';
-  if(!rec){
-    $('voiceHelp').textContent='Reconnaissance vocale indisponible. Essayez Google Chrome sur Android.';
+  if(!recognition){
+    help('Solution : ouvrez l’application dans Google Chrome sur Android depuis HTTPS. Si elle est ouverte comme content://, la reconnaissance vocale peut être bloquée.');
     return;
   }
-  try{
-    await meter();
-    rec.start();
-  }catch(e){
-    $('voiceHelp').textContent='Impossible de démarrer. Vérifiez l’autorisation du microphone puis réessayez.';
-  }
+  if(listening)return;
+  finalText=''; $('q').value='';
+  const ok=await microphonePermission(); if(!ok)return;
+  try{ recognition.start(); }
+  catch(e){ stopMeter(); help('La reconnaissance ne peut pas démarrer. Rechargez la page puis réessayez.'); }
 };
+$('stop').onclick=()=>{try{recognition?.stop()}catch(e){} listening=false; stopMeter(); $('start').disabled=false; $('stop').disabled=true; state('Prêt');};
+$('clear').onclick=()=>{$('q').value='';finalText='';$('answer').textContent='La réponse apparaîtra ici.';$('sources').textContent='Aucune recherche effectuée.';state('Prêt');};
 
-$('stop').onclick=stop;
-
-$('clear').onclick=()=>{
-  $('q').value='';
-  $('answer').textContent='La réponse apparaîtra ici.';
-  $('sources').textContent='Aucune recherche effectuée.';
-};
-
-$('clearMemo').onclick=()=>{
-  $('memo').value='';
-  $('fileName').textContent='';
-  $('importStatus').textContent='Mémoire vidée.';
-};
-
+// Import PDF / DOCX
 $('importBtn').onclick=()=>$('docFile').click();
-
-$('docFile').addEventListener('change',async()=>{
-  const file=$('docFile').files[0];
-  if(!file)return;
-
-  $('fileName').textContent=file.name;
-  $('importStatus').textContent='⏳ Lecture du document...';
-
-  try{
-    let text='';
-
-    if(file.name.toLowerCase().endsWith('.pdf')){
-      if(!window.pdfjsLib)throw new Error('Le lecteur PDF n’est pas chargé. Vérifiez la connexion Internet.');
-      pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-
-      const buffer=await file.arrayBuffer();
-      const pdf=await pdfjsLib.getDocument({data:buffer}).promise;
-      const pages=[];
-      for(let i=1;i<=pdf.numPages;i++){
-        const page=await pdf.getPage(i);
-        const content=await page.getTextContent();
-        pages.push(content.items.map(x=>x.str).join(' '));
-      }
-      text=pages.join('\\n\\n');
-    }else if(file.name.toLowerCase().endsWith('.docx')){
-      if(!window.mammoth)throw new Error('Le lecteur DOCX n’est pas chargé. Vérifiez la connexion Internet.');
-      const buffer=await file.arrayBuffer();
-      const result=await mammoth.extractRawText({arrayBuffer:buffer});
-      text=result.value;
-    }else{
-      throw new Error('Format non pris en charge. Choisissez un PDF ou un DOCX.');
-    }
-
-    if(!text.trim())throw new Error('Aucun texte exploitable n’a été trouvé. Si votre PDF est une photo/scanner, il faudra ajouter un module OCR.');
-
-    $('memo').value=text.trim();
-    $('importStatus').textContent='✅ Document importé avec succès. Vous pouvez maintenant poser une question.';
-  }catch(err){
-    $('importStatus').textContent='❌ '+(err.message||'Impossible de lire le document.');
-  }
-
-  $('docFile').value='';
-});
+$('docFile').onchange=async()=>{
+ const f=$('docFile').files[0]; if(!f)return;
+ $('fileName').textContent=f.name; $('importStatus').textContent='⏳ Lecture...';
+ try{
+  let text='';
+  if(f.name.toLowerCase().endsWith('.pdf')){
+   if(!window.pdfjsLib)throw Error('Lecteur PDF indisponible. Connectez-vous à Internet.');
+   pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+   const pdf=await pdfjsLib.getDocument({data:await f.arrayBuffer()}).promise;
+   const pages=[]; for(let i=1;i<=pdf.numPages;i++){const p=await pdf.getPage(i);const c=await p.getTextContent();pages.push(c.items.map(x=>x.str).join(' '));}
+   text=pages.join('\n\n');
+  }else if(f.name.toLowerCase().endsWith('.docx')){
+   if(!window.mammoth)throw Error('Lecteur DOCX indisponible. Connectez-vous à Internet.');
+   text=(await mammoth.extractRawText({arrayBuffer:await f.arrayBuffer()})).value;
+  }else throw Error('Choisissez un fichier PDF ou DOCX.');
+  if(!text.trim())throw Error('Aucun texte trouvé. Un PDF scanné nécessitera un OCR.');
+  $('memo').value=text.trim(); $('importStatus').textContent='✅ Document importé.';
+ }catch(e){$('importStatus').textContent='❌ '+e.message;}
+ $('docFile').value='';
+};
+$('clearMemo').onclick=()=>{$('memo').value='';$('fileName').textContent='';$('importStatus').textContent='Mémoire vidé.';};
 
 $('ask').onclick=()=>{
-  let q=$('q').value.trim(),m=$('memo').value.trim(),web=$('web').checked;
-  if(!q){$('answer').textContent='Écris ou dicte une question.';return}
-  let kws=q.toLowerCase().split(/\W+/).filter(x=>x.length>4);
-  let matches=m?kws.filter(x=>m.toLowerCase().includes(x)):[];
-
-  $('sources').innerHTML=web
-    ?'🌐 Recherche Web : prête à être connectée à l’API de recherche.'
-    :'🌐 Recherche Web désactivée.';
-
-  $('answer').textContent='Question : '+q+'\\n\\nProposition de réponse V2 :\\n'
-    +(m
-      ?'Ton mémoire contient des éléments correspondant à : '+(matches.join(', ')||'aucun mot-clé direct')+'.\\n\\nUne IA connectée pourra ensuite combiner ces éléments avec les résultats Web pour produire une réponse fiable et concise.'
-      :'Aucun contexte de mémoire fourni. Une IA connectée pourra rechercher sur le Web et construire une réponse.')
-    +'\\n\\n⚠️ Prototype : aucune clé API n’est stockée dans cette page.';
+ const q=$('q').value.trim(),m=$('memo').value.trim();
+ if(!q){$('answer').textContent='Écris ou dicte une question.';return;}
+ const kws=q.toLowerCase().split(/\W+/).filter(x=>x.length>4);
+ const matches=m?kws.filter(x=>m.toLowerCase().includes(x)):[];
+ $('sources').textContent=$('web').checked?'🌐 Recherche Web prête à être connectée à une API.':'🌐 Recherche Web désactivée.';
+ $('answer').textContent='Question : '+q+'\n\nProposition de réponse V2 :\n'+(m?'Éléments du mémoire correspondant : '+(matches.join(', ')||'aucun mot-clé direct')+'.\n\nLa connexion à une IA pourra ensuite produire la réponse complète.':'Aucun mémoire fourni. Une IA connectée pourra rechercher et répondre.')+'\n\n⚠️ Prototype : aucune clé API secrète dans le navigateur.';
 };
